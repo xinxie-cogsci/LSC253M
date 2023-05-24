@@ -1,0 +1,171 @@
+---
+title             : "Writing a brief data report in Rmd"
+shorttitle        : "LSCI253M_rmd_demo"
+date              : "`r format(Sys.time(), '%B %d, %Y')`"
+
+author: 
+  - name          : "Xin Xie"
+    address       : "3151 Social Science Plaza B, University of California, Irvine CA 92697–5100"
+    email         : "xxie14@uci.edu"
+
+affiliation:
+  - id            : "1"
+    institution   : "Language Science, University of California, Irvine"
+
+authornote: |
+  This is a tutorial used for a course on experimental methods in language research.
+
+
+keywords          : "LSCI253M"
+wordcount         : "X"
+
+floatsintext      : yes
+figurelist        : no
+tablelist         : no
+footnotelist      : no
+linenumbers       : yes
+numbersections    : true
+mask              : no
+draft             : no
+
+fontsize          : 11pt
+output: 
+  bookdown::gitbook:
+   # split_by: section+number
+    split_by: rmd
+    self_contained: true
+    config:
+      toc:
+        collapse: subsection
+        scroll_highlight: yes
+        before: null
+        after: null
+      toolbar:
+        position: static
+      edit : null
+      download: null
+      search: yes
+documentclass: book
+always_allow_html: true
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, error=TRUE, cache = FALSE)
+```
+
+
+```{r libraries, include=FALSE}
+library(tidyverse)
+library(lme4)
+```
+
+```{r constants, include=FALSE}
+colors.category <- c("red", "blue")
+base.width = 2
+base.height = 2
+```
+
+# LEVEL 1
+
+This is an **R Markdown** document. 
+
+## LEVEL 2: Visualization
+
+We will import data come from @chodroff-wilson2018, containing productions of word-initial stop voicing in American English (e.g., *dime* vs. *time*) from 104 talkers.
+
+```{r load data, echo=FALSE}
+d.exp1 <- read.csv(file = "../data/QS_Comprehension_2Talkers_Cooking.csv")
+
+d.chodroff_wilson <- read.csv(file = "../data/example_data_for_visualization.csv") %>%
+  rename(category = stop, VOT = vot, f0 = usef0, Talker = subj, Word = word, Trial = trial, Vowel = vowel) %>%
+    mutate(
+      category =
+        plyr::mapvalues(
+          category,
+          c("B", "D", "G", "P", "T", "K"),
+          c("/b/", "/d/", "/g/", "/p/", "/t/", "/k/")),
+      gender = factor(
+        plyr::mapvalues(
+          gender,
+          c("F", "M"),
+          c("female", "male")),
+        levels = c("male", "female")),
+      poa = factor(
+        plyr::mapvalues(
+          poa,
+          c("lab", "cor", "dor"),
+          c("/b/-/p/", "/d/-/t/", "/g/-/k/")),
+        levels = c("/b/-/p/", "/d/-/t/", "/g/-/k/")),
+      voicing = factor(
+        ifelse(category %in% c("/b/", "/d/", "/g/"), "yes", "no"),
+        levels = c("yes", "no"))) %>%
+    mutate(across(c(Talker, Word, gender, category), factor)) %>%
+    select(Talker, Word, Trial, Vowel, gender, category, poa, voicing, VOT, f0)
+
+```
+
+### LEVEL 3: examine category distributions
+
+```{r describe-data, echo=FALSE}
+head(d.exp1)
+str(d.exp1)
+```
+
+(ref:visualize-category-distributions) Distributions of productions of word-initial stop voicing in American English (e.g., *dime* vs. *time*). The data come from @chodroff-wilson2018. 
+
+```{r visualize-category-distributions, fig.width= base.width * 3, fig.height = base.height * 1 + 2, fig.cap="(ref:visualize-category-distributions)"}
+p <- d.chodroff_wilson %>% 
+  ggplot(aes(x = VOT, y = f0, color = voicing)) +
+  scale_x_continuous(expression("VOT (ms)")) +
+  scale_y_continuous(expression("f0 (Mel)")) +
+  scale_color_manual("Voiced", breaks = c("yes", "no"), values = colors.category) +
+  facet_grid(. ~ poa) + 
+  guides(colour = guide_legend(override.aes = list(alpha = 1)), shape = guide_legend(override.aes = list(alpha = 1))) + 
+  theme(legend.position = "top")
+
+p1 <- 
+  p + 
+  geom_point(
+    mapping = aes(shape = gender),
+    alpha = .05) +
+  scale_shape_discrete("Gender") 
+
+p1
+```
+
+### LEVEL 3: Results
+The results are shown in Figure \@ref(fig:visualize-category-distributions) and Figure \@ref(fig:visualize-category-distributions-dt).
+
+(ref:visualize-category-distributions-dt) Category distributions of /d/ and /t/.
+
+```{r visualize-category-distributions-dt, fig.width= base.width * 3, fig.height = base.height * 1 + 2, fig.cap="(ref:visualize-category-distributions-dt)"}
+ d.chodroff_wilson %>%
+  ggplot(aes(x = VOT, y = f0)) +
+  scale_x_continuous(expression("VOT (ms)"), breaks = c(10, 30, 50, 70)) +
+  scale_y_continuous(expression("f0 (Mel)")) +
+  geom_point(aes(color = voicing), alpha = .05) +
+  geom_density_2d(aes(color = voicing), linewidth = .1) +
+  scale_color_manual("Category", breaks = c("yes", "no"), labels = c("/d/", "/t/"), values = colors.category) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1))) +
+  theme(legend.position = "top",
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+```
+We use linear mixed effects regression to analyze the effects of place of articulation and voicing on the acoustic cues. Separate regressions were use to predict VOT and f0 (Mel). Both regressions used the formula:
+
+\begin{equation}\label{eq:cue-regression}
+\begin{split}
+cue \sim 1 + poa * voicing + (1 + poa * voicing | Talker)
+\end{split}
+\end{equation}
+
+```{r lmer-cue}
+m.data <- lmer(VOT ~ poa * voicing + 
+         (1 + poa * voicing | Talker), 
+       data = d.chodroff_wilson)
+
+sjPlot::tab_model(m.data,
+       #   show.r2 = F,
+          title = "(\\#tab:cue-analysis) Results of linear mixed-effects regression of VOTs.")
+```
