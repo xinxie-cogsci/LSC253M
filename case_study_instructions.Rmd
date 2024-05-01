@@ -1,0 +1,569 @@
+---
+title: "case_study_RT_accuracy"
+author: "XX"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, error=TRUE, cache = FALSE)
+```
+
+```{r libraries, include=FALSE}
+library(tidyverse)
+library(magrittr)
+library(lme4)
+```
+
+## Experiment design
+
+Describe the design of the experiment in your own words.
+
+```{r load-data}
+d.all <- read.csv(file = "data/xie_data_full.csv") %>%
+  select(PartOfExp, Trial, Filename, Word, Response, RT, WorkerId, Condition, List, Speaker, VisualProbeType, Error, CorrectResponse, Block, BaselineRT, ListOrder, ListID, Phase, subjMean_BlockRT, BaselineRT_raw) %>%
+   filter(Condition %in% 
+           c("Mandarin-accented English (same)",
+             "Control (native accent)" 
+         ))
+```
+
+## Data cleaning
+
+
+
+### 1. Examine RT distribution
+
+Figure \ref{fig:distribution-of-subj-wise-mean-RTs-before-exclusions} shows the distribution of subjects' mean raw response time by Block and Condition. Note that for the majority of subjects in each condition, the mean RT in each block was (considerably) less than 2.5 seconds. However, some subjects registered extremely slow RTs (e.g., mean RT > 5 seconds in one or more blocks), which was likely due to divided attention (e.g., multi-tasking during the experiment) or to technical issues affecting the recording of RTs.
+
+```{r distribution-of-subj-wise-mean-RTs-before-exclusions, fig.cap="Distribution of subjects mean RTs by Block and Condition, prior to outlier exclusions.\\label{fig:distribution-of-subj-wise-mean-RTs-before-exclusions}"}
+rt_dist <- d.all %>%
+  distinct(WorkerId, Block, .keep_all = TRUE) %>%
+  filter(subjMean_BlockRT < 10000) %>%
+  # mutate(
+  #   Condition = str_wrap(Condition, width = 3),
+  #   Condition = paste0("\n", Condition)
+  #   ) %>%
+  ggplot(aes(x = subjMean_BlockRT, fill = Condition)) +
+  facet_grid(Condition ~ Block, 
+             labeller = "label_both") +
+  geom_histogram(binwidth = 250, alpha = 0.75, show.legend = FALSE) +
+  scale_x_continuous(breaks = c(0, 2500, 5000, 7500, 10000),
+                     labels = c("0", "", "5000", "", "1000")) +
+  labs(title = "Distribution of subject-wise mean RTs",
+       subtitle = "plot shows raw data before outlier exclusions\n(subj-wise mean Block RTs > 10 seconds removed for clarity)",
+       x = "mean Block RT") +
+  theme_bw()
+
+rt_dist
+
+```
+
+## 2. Data exclusion
+
+Describe the procedure you take to exclude outliers (subjects, trials, etc.).
+
+### Exclusion by subject
+This fourth criterion was an attempt to identify and remove subjects who consistently registered slow response times because they did not perform the task faithfully (e.g., multi-tasking) or because their computer equipment did not provide reliable recording of RTs over the web. (see Table \ref{table:number-of-subjs-excluded-for-slow-RTs-overall}).
+
+Figure \ref{fig:RT-distribution-after-outlier-removal-step1} shows the distribution of RTs by condition and block *after* removing ineligible participants. 
+
+```{r outlier-exclusion-step1-2}
+## ----------------------------------------
+## Step 1.2
+# identify *eligible* subjects who had a mean Block RT > 3 SDs from Condition Block mean.
+non_eligible_subjs <- d.all %>%
+  group_by(Condition, Block) %>%
+  filter(abs(scale(subjMean_BlockRT)) > 3) %>%
+  ungroup() %>%
+  select(WorkerId, Condition) %>%
+  distinct(WorkerId, .keep_all = TRUE)
+
+# how many RT-based subject exclusions in total
+#length(non_eligible_subjs_02$WorkerId)
+
+# how many RT-based subject exclusions per Condition
+xtabs(~ Condition, non_eligible_subjs) %>%
+  addmargins(., FUN = list(TOTAL = sum)) %>%
+  as.data.frame(.) %>%
+  kable(., caption = "Number of participants excluded based on mean RTs\\label{table:number-of-subjs-excluded-for-slow-RTs-overall}")
+```
+
+```{r outlier-exclusion-complete-step1}
+## ----------------------------------------
+# remove those inelligible subjects 
+dat_out1 <- d.all %>%
+  filter(
+    !(WorkerId %in% non_eligible_subjs$WorkerId)
+  )
+
+```
+
+```{r RT-distribution-after-outlier-removal-step1, fig.cap="...\\label{fig:RT-distribution-after-outlier-removal-step1}" }
+# remake RT distribution plot from above (by Condition and Block),
+# but use updated (post-exclusion) data frame, 
+# and keep x-axis range the same
+rt_dist %+% distinct(dat_out1, WorkerId, Block, .keep_all = TRUE) +
+  coord_cartesian(xlim = ggplot_build(rt_dist)$panel$ranges[[1]]$x.range) +
+  labs(
+    subtitle = "plot shows all data after outlier exclusion Step 1"
+  )
+
+```
+
+### Exclusion by trial with extreme RTs
+
+The second step of outlier removal was to exclude trials with atypical RTs. We omitted trials based on the following criteria:
+
+- RTs less than 200ms 
+    + based on the assumption that it takes approx. 200ms to program a motor response; hence RTs less than 200ms from the onset of the target stimulus reflect processing of earlier information
+
+- RTs greater than 3 SDs from subject's mean
+
+**The proportion of trials excluded based on these criteria was similar across conditions** (see Table \ref{table:prop-trials-excluded-per-condition}). 
+
+```{r outlier-removal-step2, echo = FALSE}
+dat_out2 <- dat_out1 %>%
+  # Remove trials with extremely long RTs
+  filter(
+    RT >= 200,
+    RT <= 8000
+  ) %>%
+  # remove subject-wise RTs based on 3 SDs
+  group_by(WorkerId) %>%
+  filter(
+    abs(scale(RT)) <= 3
+  ) %>%
+  # calculate subject-wise mean RTs *after* trial-wise outlier exclusion
+  group_by(WorkerId, Block) %>%
+  mutate(
+    subjMean_BlockRT_after_trial_exclusion = mean(RT)
+  ) %>%
+  ungroup()
+
+
+# how many total observations from usable subjects 
+# (i.e., after outlier step 1)
+# nrow(dat_out1)
+
+# how many observations from usable subjects after additionally 
+# removing atypical RTs (i.e., outlier step 2)
+# nrow(dat_out2)
+
+# percentange of excluded data
+# (1 - (nrow(dat_out2) / nrow(dat_out1))) * 100
+
+
+# Did trial-wise outlier exclusion disproportionately affect any experimental Conditions?
+dat_out2 %>%
+  group_by(WorkerId, Condition) %>%
+  # how many trials were excluded for each Subject
+  # (i.e., 30 total trials (excluding practice) minus the number of usable trials in post-exclusion df)
+  summarise(
+    n_useableTrials = n(),
+    n_excludedTrials = 36 - n()
+  ) %>%
+  # proportion of excluded trials per condition
+  group_by(Condition) %>%
+  summarise(
+    n_subjs = length(WorkerId),
+    n_useableTrials = sum(n_useableTrials),
+    n_excludedTrials = sum(n_excludedTrials),
+    prct_excludedTrials = (n_excludedTrials / (n_useableTrials + n_excludedTrials)) * 100
+  ) %>%
+  mutate(Condition = as.character(Condition)) %>%
+  rbind(list("TOTAL:", sum(.$n_subjs), sum(.$n_useableTrials), sum(.$n_excludedTrials), mean(.$prct_excludedTrials))) %>%
+  kable(., digits = 2,
+        caption = "Proportion of trials excluded per condition.\\label{table:prop-trials-excluded-per-condition}")
+
+
+# range of data loss per subject
+dat_out2 %>%
+  # filter(Condition %in% c("Mandarin-accented English (same)", "Control (native accent)", "Noise (+2)")) %>%
+  group_by(WorkerId) %>%
+  summarise(
+    prct_loss = 1 - n() /36
+  ) %>%
+  ggplot(aes(x = prct_loss)) + geom_histogram()
+
+```
+
+Figure \ref{fig:distribution-of-useable-trials-from-useable-subjects} shows the distribution of raw RTs after both subject-wise and trial-wise outlier exclusion (i.e., outlier exclusions steps 1 and 2). **There are still a few slow RTs. We could consider adding an upper bound (e.g., exclude RTs > 4 or 5 seconds)?**
+
+```{r distribution-of-useable-trials-from-useable-subjects, fig.cap="...\\label{fig:distribution-of-useable-trials-from-useable-subjects}"}
+# distribution of useable trials from useable subjects
+dat_out2 %>%
+  filter(PartOfExp != "practice") %>%
+  ggplot(aes(x = RT)) + 
+  geom_histogram() +
+  facet_wrap(~ Block, ncol = 1, labeller = "label_both")
+```
+
+Figure \ref{fig:diff-in-baseline-means-pre-vs-post-trialWise-outlier-exclusion} shows the difference between subjects' mean baseline (Block 5) RT when calculated before vs. after exclusion of trial-wise outliers. There are several points to make here:
+
+- For the vast majority of subjects, trial-wise outlier exclusion doesn't affect estimation of baseline RTs
+    + i.e., difference btw baseline calculation methods ~0ms
+
+- However, **when trial-wise outlier exclusion *does* matter, it matters a lot**! 
+    + i.e., for subjects with a non-zero difference on these two baseline RT measures, the mean size of the difference is nearly 600ms.
+    + For perspective, 600ms is several orders of magnitude larger than the expected main effect of accent in this experiment (e.g., in C&G 2004, the difference between accent and control conditions in Block 1 is ~100-150ms across experiments).
+
+- Thus, if we don't exclude trial-wise outliers, we not only massively mis-estimate the baseline RT for a subset of subjects, we also propogate this estimation error into the rest of the data via the RT normaization procedure (experimental RTs - subject's mean baseline RT).
+
+
+```{r diff-in-baseline-means-pre-vs-post-trialWise-outlier-exclusion, fig.cap="...\\label{fig:diff-in-baseline-means-pre-vs-post-trialWise-outlier-exclusion}"}
+
+dat_out2 %>%
+  filter(Block == "5") %>%
+  distinct(WorkerId, .keep_all = TRUE) %>%
+  mutate(
+    diff = subjMean_BlockRT_after_trial_exclusion - subjMean_BlockRT,
+    abs_diff = abs(diff),
+    mean_abs_nonzero_diff = mean(abs_diff[abs_diff > 0])
+  ) %>%
+  ggplot(aes(x = abs(diff))) +
+  geom_histogram() +
+  geom_vline(aes(xintercept = mean_abs_nonzero_diff), 
+             colour = "red", linetype = "dashed") +
+  annotate(geom = "text", x = 800, y = 150,
+           label = "average size of\nnon-zero difference",
+           colour = "red") +
+  labs(x = "absolute difference between subjects' mean baseline RT\ncalculated before vs. after trial-wise outlier exclusion") +
+  theme_bw()
+```
+
+## Examine RTs and Accuracy during practice and baseline (after exclusion steps 1 and 2)
+
+Now that we've excluded extreme subject and trial outliers, we can look at the practice and baseline data to assess our high-level predictions about how participants should perform on this web-based task.
+
+1. **One data pattern that we expect to find is that performance (both RTs and accuracy) in the practice and baseline blocks is comparable across experimental conditions.** We expect this because these blocks of the experiment were identical across conditions (i.e., native-accented stimuli presented in the clear).
+    
+    + ... *if performance in the **practice block** differs substantially across conditions*, we would need to consider whether the subjects in each condition were sampled from the same underlying population (e.g., did we run all conditions at approximately the sme time of day?).
+
+    + ... *if performance in the **baseline block** differs substantially across conditions*, we would need to consider whether exposure to different types of speech during the main block of the experiment induced overall differences in task performance (in which case the baseline block doesn't provide a reliable condition-independent "baseline" for normalization purposes).
+
+2. **A second data pattern that we expect to find is evidence of improvement (adaptation) over the course of the task.** One way this would manifest is faster RTs and increased accuracy in the post-experiment baseline block, relative to the practice phase. 
+
+
+
+
+
+
+Figure \ref{fig:RT-distribution-across-subjs-during-practice-and-baseline} shows the distribution of subject-wise mean RTs during the practice and baseline blocks as a function of exposure condition. 
+
+1. The distributions are similar across exposure conditions. Thus, listening to foreign-accented speech or speech in noise during the exposure phase did not induce weird response behavior.
+
+2. As expected, RTs are consistently faster and less variable in the baseline block, relative to the practice block, across conditions. Thus, participants are adapting to the task.
+
+Figure \ref{fig:Accuracy-distribution-across-subjs-during-practice-and-baseline} shows the distribution of subject-wise mean Accuracy during the practice and baseline blocks as a function of exposure condition. 
+
+1. There's a bit of variability between conditions during the practice block -- but not enough to be troubling. Performance in the baseline task is comparable across conditions. 
+
+2. Accuracy is higher in the baseline task than during practice, so further evidence of overall task adaptation.
+
+\textcolor{red}{\textbf{NOTE REGARDING OUTLIER EXCLUSION.}} So far, we haven't implemented any accuracy-based exclusion criteria. Figure \ref{fig:Accuracy-distribution-across-subjs-during-practice-and-baseline} shows that all subjects are above chance-level accuracy in the baseline phase (except one subject in the +1SNR condition who is *at* chance). Hence, I don't think we need to implement accuracy-based exclusions. 
+
+
+```{r RT-distribution-across-subjs-during-practice-and-baseline, fig.width = 11, fig.height = 5, fig.cap = "...\\label{fig:RT-distribution-across-subjs-during-practice-and-baseline}"}
+prac_baseline_grand_means <- dat_out2 %>%
+  filter(PartOfExp %in% c("practice", "baseline")) %>%
+  group_by(PartOfExp) %>%
+  summarise( 
+    meanRT_ofPhase = mean(RT),
+    meanAccuracy_ofPhase = mean(1-Error)
+    ) 
+
+prac_baseline_condition_means <- dat_out2 %>% 
+  filter(PartOfExp %in% c("practice", "baseline")) %>%
+  group_by(WorkerId, Condition, PartOfExp) %>%
+  summarise( 
+    meanRT = mean(RT),
+    meanAccuracy = mean(1-Error)
+    )
+
+ggplot(prac_baseline_condition_means, 
+       aes(x = Condition, y = meanRT, colour = Condition, fill = Condition)) +
+  facet_wrap(~ PartOfExp, labeller = "label_both") +
+  geom_violin(aes(fill = NULL)) +
+  geom_hline(aes(yintercept = meanRT_ofPhase), 
+             data = prac_baseline_grand_means,
+             linetype = "dashed", colour = "grey30", size = 1) +  
+  scale_x_discrete(breaks = levels(dat_out2$Condition),
+                   labels = gsub("\\s", "\n", levels(dat_out2$Condition))) +
+  geom_dotplot(binaxis = "y", stackdir = "center", 
+               binpositions = "all", dotsize = 0.5, alpha = 0.3) +
+  stat_summary(fun.data = "mean_cl_boot", geom = "pointrange", 
+               fatten = 3, size = 1) +
+  guides(fill = FALSE, colour = FALSE) +
+  labs(title = "Distribution of subject-wise RTs during practice and baseline blocks",
+       subtitle = "Each small dot indicates one subject's mean. Dashed lines indicate block means across conditions.",
+       x = "Exposure condition", 
+       y = "mean RT (ms)") +
+  geom_rangeframe(colour = "black") +
+  theme_bw() +
+  theme(panel.border = element_blank())  
+```
+
+```{r Accuracy-distribution-across-subjs-during-practice-and-baseline, fig.width = 11, fig.height = 5, fig.cap = "...\\label{fig:Accuracy-distribution-across-subjs-during-practice-and-baseline}"}
+ggplot(prac_baseline_condition_means, 
+       aes(x = Condition, y = meanAccuracy, colour = Condition, fill = Condition)) +
+  facet_wrap(~ PartOfExp, labeller = "label_both") +
+  geom_violin(aes(fill = NULL)) +
+  geom_hline(aes(yintercept = meanAccuracy_ofPhase), 
+             data = prac_baseline_grand_means,
+             linetype = "dashed", colour = "grey30", size = 1) +  
+  scale_x_discrete(breaks = levels(dat_out2$Condition),
+                   labels = gsub("\\s", "\n", levels(dat_out2$Condition))) +
+  stat_summary(fun.data = "mean_cl_boot", geom = "pointrange", 
+               fatten = 3, size = 1) +
+  guides(fill = FALSE, colour = FALSE) +
+  labs(title = "Distribution of subject-wise accuracy during practice and baseline blocks",
+       subtitle = "Dashed lines indicate block means across conditions",
+       x = "Exposure condition", 
+       y = "mean Accuracy") +
+  geom_rangeframe(colour = "black") +
+  theme_bw() +
+  theme(panel.border = element_blank())  
+```
+
+## Summary of exclusion criteria:\label{sec:summary-of-exclusion-criteria}
+
+- Participant-level exclusions:
+    + non-monolingual English speakers
+    + subjects who used audio equipment other than (in-ear or over-ear) headphones
+    + subjects with high familiarity with Mandarin-accented English (based on subjective self report)
+    
+    + subject's whose mean RT in any block was > 3 SDs from Condition mean
+    
+- Trial-level exclusions:
+    + raw RTs > 5 seconds
+    + RTs > 3 SDs from subject's mean RT in each block
+
+
+We applied the same exclusion criteria across all RT and error analyses.
+
+## Normalize experimental RTs relative to baseline
+
+Now that we've completed all trial-wise RT exclusions, we can calculate _normalized_ RTs that take into account each subject's baseline speed on this task. For this procedure, we adjust the RTs on each trial by subtracting out the corresponding subject's mean RT during the baseline phase. We refer to the resulting measure as _adjusted RTs_.
+
+```{r, echo = TRUE}
+# calculate each subject's mean Baseline RT
+# and subtract that value from experimental RTs
+dat_out2 %<>%
+  group_by(WorkerId) %>%
+  mutate(
+    # calculate subject-wise mean RTs during baseline block
+    meanBaselineRT = mean(RT[PartOfExp == "baseline"]),
+    
+    # calculate normalized RTs
+    AdjustedRT = RT - meanBaselineRT,
+    
+    # calculate subject-wise mean Adjusted RT across Blocks 1-4
+    meanAdjustedRT = mean(AdjustedRT[PartOfExp == "main"])
+  )
+```
+
+Now we want to check the distribution of adjuted RTs to make sure it seems reasonable, given our expectations about task performance.
+
+Note that we expect baseline RTs to be faster on average than RTs during the experimental block, regardless of exposure condition. We expect this for two reasons. First, the baseline task occurred at the end of the experiment, after participants had adapted to the task. Second, _all_ participants heard native accented speech during the baseline phase; hence, there was no need for accent adaptation during this phase.
+
+```{r prep-lmer}
+
+# change to dat_out3 to implement 3rd outlier step
+dat <- dat_out2 %>%
+  filter(PartOfExp == "main") %>%
+  droplevels(.)
+
+## ------------------------------------------ 
+## Define contrast coding for analyses
+## ------------------------------------------ 
+
+dat <- within(dat %>%
+                mutate(Block = factor(Block)), {
+  # helmert coding for Block for C&G-style analysis
+  contrasts(Block) <- contr.helmert(4)
+})
+
+## ------------------------------------------ 
+## EXPERIMENT 1
+exp1 <- dat %>%
+  within(., {
+  # sum coding for accent condition
+  Condition <- factor(Condition)
+	contrasts(Condition) <- cbind("Accented" = c(1,-1))
+	
+	 # sum contrast code List (counterbalancing nuissance factor)
+	List <- factor(List)
+  contrasts(List) <- contr.sum(nlevels(List))
+  colnames(contrasts(List)) <- rownames(contrasts(List))[1:7]
+  
+  # sum code ListID
+  ListID <- factor(ListID)
+  contrasts(ListID) <- contr.sum(nlevels(ListID))
+
+  #sum code ListOrder
+  ListOrder <- factor(ListOrder)
+  contrasts(ListOrder) <- contr.sum(nlevels(ListOrder))
+})
+```
+
+
+# Modeling strategy
+
+## Model building and assessment
+RTs were analyzed using linear mixed effects regression, as implemented in the lme4 package (version 1.1-10: Bates, Maechler, Bolker, \\& Walker, 2014) in R (R Core Team, 2014). Response accuracy (incorrect vs. correct response) was analyzed using mixed effects logistic regression (see Jaeger, 2008). All mixed effects models were specified with the maximal random effects structure justified by the experimental design: that is, by-subject and by-item random intercepts, by-subject random slopes for all design variables manipulated within subjects, and by-item random slopes for all design variables manipulated within items. If the definitionally maximal model failed to converge within ten thousand iterations, the model was systematically simplified in a step-wise fashion until the model converged. These steps involved removing correlations among random effects; dropping the random effects term with the least variance; and removing fixed effects that were inconsequential for the theory being tested (i.e., counterbalancing nuisance variables).
+
+## Variable coding
+Unless otherwise specified, all numeric predictors were centered and categorical predictors were coded as sum contrasts, in order to reduce collinearity among predictors. 
+
+# Experiment 1: Adaptation to Mandarin-accented English
+## Participants
+```{r}
+# subjects per condition
+exp1 %>% 
+  group_by(Condition) %>%
+  distinct(WorkerId) %>%
+  tally() %>%
+  kable()
+```
+
+## Exp1 Response Times
+
+Figure \ref{fig:exp1-RTs-by-condition} shows adjusted RTs (RTs on experimental trials minus baseline RT) over the course of the experiment as a function of exposure condition. 
+
+```{r exp1-RTs-by-condition, fig.width = 11, fig.height = 5, fig.cap="Average RTs by exposure condition in Experiment 1.\\label{fig:exp1-RTs-by-condition}"}
+
+# axis defaults
+rt_y_label <- "Adjusted RTs (ms)\n(experiment RTs - baseline RT)"
+
+# aesthetic defaults
+dodge_amt <- 0.9
+dodge_amt2 <- 0.0
+base_font_size <- 13
+strip_text_size <- 11
+
+
+# exp1 defaults
+palette_exp1 <- c("red", "grey30")
+
+exp1 %>%
+  mutate(Phase = ifelse(Block == 4, "Test phase", "Exposure phase")) %>%
+  filter(CorrectResponse == "correct") %>%
+  group_by(WorkerId, Condition, Block, Phase) %>%
+  summarise(
+    meanAdjustedRT = mean(AdjustedRT)
+  ) %>%
+  mutate(
+    Phase = gsub("Test phase", 
+                 "Test phase\n(Mandarin-accent)",
+                 Phase)
+  ) %>%
+  ggplot(aes(x = Block, y = meanAdjustedRT, colour = Condition)) +
+  geom_dotplot(aes(fill = Condition),
+               binaxis = "y",
+               binpositions = "all",
+               position = position_dodge(dodge_amt),
+               stackdir = "center",
+               dotsize = 0.5,
+               alpha = 0.2) +
+  # stat_summary(fun.data = "mean_cl_boot", 
+  #              geom = "pointrange", 
+  #              position = position_dodge(0),
+  #              fatten = 3,
+  #              show.legend = FALSE) +
+  stat_summary(fun.data = "mean_cl_boot", 
+               geom = "errorbar", 
+               position = position_dodge(dodge_amt2),
+               width = .25,
+               show.legend = FALSE) +
+  stat_summary(fun.data = "mean_cl_boot", 
+               geom = "point", 
+               position = position_dodge(dodge_amt2),
+               size = 2.5,
+               show.legend = FALSE) +
+  stat_summary(aes(group = Condition),
+               fun.y = "mean", 
+               geom = "line",
+               position = position_dodge(dodge_amt2),
+               show.legend = FALSE) +
+  facet_wrap(~ Phase, scales = "free_x") +
+  geom_hline(yintercept = 0, linetype = "dashed", "grey") +
+  coord_cartesian(ylim = c(-500, 1000)) +
+  scale_x_discrete(expand = c(0,0)) +
+  scale_colour_manual("Exposure condition",
+                      breaks = c("Mandarin-accented English (same)",
+                                 "Control (native accent)"),
+                      labels = c("Mandarin-accented", "Control (native accent)"),
+                      values = c("red", "grey30")) +
+  scale_fill_manual("Exposure condition",
+                      breaks = c("Mandarin-accented English (same)",
+                                 "Control (native accent)"),
+                      labels = c("Mandarin-accented", "Control (native accent)"),
+                      values = c("red", "grey30")) +
+  labs(y = rt_y_label) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1))) +
+  theme_bw(base_size = base_font_size) +
+  theme(panel.border = element_blank(),
+        strip.text = element_text(size = strip_text_size),
+        legend.position = "top")
+
+```
+We analyze adjusted RTs following C&G's analysis decisions as closely as possible. For this analysis, we assess the effect of exposure condition (Mandarin-accented English vs. control) on processing speed separately for RTs during the exposure phase and the test phase. To assess the _change_ in RTs during the course of exposure, we split the 18-trial exposure phase into three blocks of 6 trials and use the resulting Block variable as a categorical predictor of RTs. Wheras C&G performed this by-block analysis using a by-subject (F1) mixed ANOVA, we use LMEMs to simultaneously model subject and item random effects.
+
+
+#### Exposure
+A linear mixed effects model was fit to adjusted RTs for correct responses during the exposure phase. Fixed effects were specified for exposure condition (Accented vs. Control; sum contrast coded), block (1-3; helmert coded), counterbalancing list (4-level nuisance factor: sum contrast coded) and list order (forward vs. reverse order; sum contrast coded) and all interactions. Random intercepts were specified for subjects and items, along with a by-item random slope for condition.
+```{r exp1-byBlock-exposureRT-CnG, echo = TRUE}
+# Model specification:
+# by-block analysis of RTs during Exposure -- a la Clarke and Garrett (2004)
+exp1_byBlock_exposureRT_CnG <- lmer(AdjustedRT ~ Condition * Block +
+                                      (1 + Block | WorkerId) + 
+                                      (1 + Condition | Word), 
+                                    # subset on Block to get data from exposure phase,
+                                    # and then reapply helmert coding to accommodate
+                                    # adjusted factor levels
+                                    data = exp1 %>%
+                                      filter(
+                                        CorrectResponse == "correct",
+                                        Block %in% c("1","2","3")
+                                        ) %>%
+                                      mutate(
+                                        Block = droplevels(Block)
+                                        ),
+                                    contrasts = list(Block = contr.helmert),
+                                    REML = FALSE)
+
+# double check contrast coding...
+# particularly for BLOCK, since we subsetted on this predictor
+# and then reapplied helmert coding from within the model call
+exp1_byBlock_exposureRT_CnG@pp$X %>% 
+  attr("contrasts")
+
+```
+
+Our by-trial analysis of the test RTs already shows evidence of adaptation in the control condition during test.
+
+
+```{r exp1-byBlock-testRT-CnG, echo = TRUE}
+# Model specification:
+# by-block analysis of RTs during TEST 
+exp1_byBlock_testRT_CnG <- lmer(AdjustedRT ~ Condition +
+                                      (1 | WorkerId) + 
+                                      (1 + Condition | Word), 
+                                    # subset on Block to get data from exposure phase,
+                                    # and then reapply helmert coding to accommodate
+                                    # adjusted factor levels
+                                    data = exp1 %>%
+                                      filter(
+                                        CorrectResponse == "correct",
+                                        Block == "4"
+                                        ),
+                                    REML = FALSE)
+
+# double check contrast coding...
+exp1_byBlock_testRT_CnG@pp$X %>% 
+  attr("contrasts")
+
+summary(exp1_byBlock_testRT_CnG)
+
+```
