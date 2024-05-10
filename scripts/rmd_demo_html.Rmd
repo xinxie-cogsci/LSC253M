@@ -51,6 +51,7 @@ always_allow_html: true
 ---
 
 ```{r setup, include=FALSE}
+rm(list=ls())
 knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, error=TRUE, cache = FALSE)
 ```
 

@@ -10,6 +10,10 @@ knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, error=TRUE
 ```
 
 ```{r libraries, include=FALSE}
+color.condition = c("yellow", "blue")
+```
+
+```{r libraries, include=FALSE}
 library(tidyverse)
 library(magrittr)
 library(lme4)
@@ -20,7 +24,7 @@ library(lme4)
 Describe the design of the experiment in your own words.
 
 ```{r load-data}
-d.all <- read.csv(file = "data/xie_data_full.csv") %>%
+d.all <- read.csv(file = "xie_data_full.csv") %>%
   select(PartOfExp, Trial, Filename, Word, Response, RT, WorkerId, Condition, List, Speaker, VisualProbeType, Error, CorrectResponse, Block, BaselineRT, ListOrder, ListID, Phase, subjMean_BlockRT, BaselineRT_raw) %>%
    filter(Condition %in% 
            c("Mandarin-accented English (same)",
