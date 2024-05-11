@@ -167,6 +167,5 @@ m.data <- lmer(VOT ~ poa * voicing +
        data = d.chodroff_wilson)
 
 sjPlot::tab_model(m.data,
-       #   show.r2 = F,
           title = "(\\#tab:cue-analysis) Results of linear mixed-effects regression of VOTs.")
 ```
